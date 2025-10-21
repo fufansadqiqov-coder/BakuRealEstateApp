@@ -1,5 +1,5 @@
 # =========================================================
-# BÜTÜN KOD
+# BÜTÜN KOD (Streamlit + OSS + Scraping + Analiz + Email + UI)
 # =========================================================
 import streamlit as st
 import requests
@@ -26,7 +26,7 @@ try:
     ACCESS_KEY_SECRET = st.secrets["ACCESS_KEY_SECRET"]
     APP_PASSWORD = st.secrets["APP_PASSWORD"]
 except (KeyError, FileNotFoundError):
-    st.error("Secrets konfiqurasiyası tapılmadı. Zəhmət olmasa `.streamlit/secrets.toml` faylını yaradın.")
+    st.error("Secrets konfiqurasiyası tapılmadı. `.streamlit/secrets.toml` faylını yaradın.")
     st.stop()
 
 ENDPOINT = "oss-ap-southeast-1.aliyuncs.com"
@@ -93,7 +93,7 @@ def save_df_to_oss(_bucket: oss2.Bucket, df: pd.DataFrame):
 def send_email(subject: str, body: str, receivers: list):
     if not all([SENDER_EMAIL, APP_PASSWORD, receivers]):
         st.warning("Email konfiqurasiyası tam deyil, bildiriş göndərilmədi.")
-        return
+        return False
     msg = EmailMessage()
     msg['Subject'] = subject
     msg['From'] = SENDER_EMAIL
@@ -182,12 +182,8 @@ def process_and_analyze_item(raw_details: Dict[str, Any], ortalama_m2: pd.DataFr
     processed['Metroya məsafə (km)'] = round(mesafe_km,2) if mesafe_km is not None else None
     # Seqment
     if avg_price and processed['qiymet_m2']<avg_price:
-        processed['segment'] = "🚀 Xüsusi Fürsət" if mesafe_km is not None and mesafe_km<0.5 else "🏠 Yeni Fürsət"
-    else:
-        processed['segment'] = "Standart"
-    return processed
+        processed['segment'] = "🚀 Xüs"
 
-# =========================================================
 # Burada artıq run_process və UI hissəsi birləşdirilə bilər (sənin əvvəlki kodla eyni, metro məsafəsi artıq daxil edilib)
 
 # --- STREAMLIT UI ---
@@ -363,3 +359,4 @@ else: # İstifadəçi giriş edibsə
             
 
     st.markdown('</div>', unsafe_allow_html=True)
+
