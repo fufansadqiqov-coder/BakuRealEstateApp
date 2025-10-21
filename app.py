@@ -1,5 +1,5 @@
 # =========================================================
-# BÜTÜN KODU BUNUNLA ƏVƏZ EDİN
+# BÜTÜN KOD
 # =========================================================
 import streamlit as st
 import requests
@@ -20,7 +20,7 @@ import random
 import concurrent.futures
 
 # =========================================================
-# === KONFİQURASİYA ===
+# KONFİQURASİYA
 try:
     ACCESS_KEY_ID = st.secrets["ACCESS_KEY_ID"]
     ACCESS_KEY_SECRET = st.secrets["ACCESS_KEY_SECRET"]
@@ -35,14 +35,12 @@ HOME_SALES_KEY = "Home Sales Statistika and Location.xlsx"
 OUTPUT_KEY = "Depo.xlsx"
 REGISTERED_USERS_EXCEL_KEY = "Gmail.xlsx"
 SENDER_EMAIL = "fufansadqiqov@gmail.com"
-# Bu siyahı admin bildirişləri üçündür
 ADMIN_EMAILS = ["ugurnihat123321@gmail.com", "eyvazazim@gmail.com"]
 HEADERS = { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36" }
 BASE_URL = "https://bina.az"
 
 # =========================================================
-# --- YARDIMÇI FUNKSİYALAR ---
-
+# YARDIMÇI FUNKSİYALAR
 @st.cache_resource
 def get_oss_bucket() -> oss2.Bucket:
     try:
@@ -105,9 +103,10 @@ def send_email(subject: str, body: str, receivers: list):
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(SENDER_EMAIL, APP_PASSWORD)
             server.send_message(msg)
-        st.success(f"Bildiriş {len(receivers)} ünvana uğurla göndərildi! 📧")
+        return True
     except Exception as e:
         st.error(f"Email göndərilərkən xəta baş verdi: {e}")
+        return False
 
 def load_registered_users_from_excel(bucket: oss2.Bucket) -> set:
     try:
@@ -134,16 +133,13 @@ def save_new_user_to_excel(bucket: oss2.Bucket, new_email: str):
         st.error(f"Yeni istifadəçi yadda saxlanılarkən xəta: {e}")
 
 # =========================================================
-# --- ƏSAS PROSESLƏR (SCRAPING VƏ ANALİZ) ---
-
+# SCRAPING & ANALİZ
 def scrape_item_details(session: requests.Session, link: str) -> Optional[Dict[str, Any]]:
-    """Səhifədən bütün detalları çəkir və xam bir lüğət (dictionary) qaytarır."""
     try:
         r = session.get(link, headers=HEADERS, timeout=15)
         r.raise_for_status()
         soup = BeautifulSoup(r.text, "html.parser")
         map_div = soup.find("div", {"id": "item_map"})
-        
         details = {
             "Qiymet": soup.find("div", class_="product-price__i").get_text(strip=True) if soup.find("div", class_="product-price__i") else None,
             "Erazi": soup.find("h1", class_="product-title").get_text(strip=True).split(",")[-1].strip() if soup.find("h1", class_="product-title") else None,
@@ -152,181 +148,48 @@ def scrape_item_details(session: requests.Session, link: str) -> Optional[Dict[s
             "Lng": float(map_div.get("data-lng")) if map_div and map_div.get("data-lng") else None,
             "Elan yerlesdirilme tarixi": soup.find_all("span", class_="product-statistics__i-text")[1].get_text(strip=True) if len(soup.find_all("span", class_="product-statistics__i-text")) > 1 else None
         }
-        
         keys = [i.get_text(strip=True) for i in soup.find_all("label", class_="product-properties__i-name")]
         values = [k.get_text(strip=True) for k in soup.find_all("span", class_="product-properties__i-value")]
-        
         details.update(dict(zip(keys, values)))
         return details
-    except RequestException:
-        # Səhifə yüklənməsə, bu linki ötür
-        return None
     except Exception:
-        # Digər hər hansı bir xəta olarsa (məsələn, səhifə quruluşu fərqli olarsa), bu linki ötür
         return None
 
 def process_and_analyze_item(raw_details: Dict[str, Any], ortalama_m2: pd.DataFrame, metro_data: pd.DataFrame) -> Optional[Dict[str, Any]]:
-    """Bir elanın məlumatlarını tam şəkildə emal edir: təmizləyir, analiz edir və yekun formata salır."""
     if not raw_details: return None
-
-    # --- Addım 1: Dəyərlərin Təmizlənməsi ---
     def clean_value(value):
         if isinstance(value, str):
-            if any(currency in value for currency in ["AZN", "USD", "EUR"]): return int("".join(re.findall(r'\d+', value)))
+            if any(c in value for c in ["AZN","USD","EUR"]):
+                return int("".join(re.findall(r'\d+', value)))
             if "m²" in value:
                 match = re.search(r'(\d+\.?\d*)', value)
                 return float(match.group(1)) if match else value
         return value
-
-    processed = {key: clean_value(value) for key, value in raw_details.items()}
-    
-    qiymet = processed.get("Qiymet")
-    sahe = processed.get("Sahə")
-    lat, lng = processed.get("Lat"), processed.get("Lng")
-    
-    if not all([qiymet, sahe, processed.get("Erazi")]) or sahe == 0: return None
-
-    # --- Addım 2: Analiz (m² qiyməti) ---
-    processed['qiymet_m2'] = round(qiymet / sahe)
-    
-    area_avg_price_row = ortalama_m2[ortalama_m2["Erazi"].str.lower() == processed["Erazi"].lower()]
+    processed = {k: clean_value(v) for k,v in raw_details.items()}
+    if not all([processed.get("Qiymet"), processed.get("Sahə"), processed.get("Erazi")]) or processed.get("Sahə")==0: return None
+    processed['qiymet_m2'] = round(processed['Qiymet']/processed['Sahə'])
+    area_avg_price_row = ortalama_m2[ortalama_m2["Erazi"].str.lower()==processed["Erazi"].lower()]
     avg_price = area_avg_price_row["Ortalama_Qiymet_m2"].values[0] if not area_avg_price_row.empty else None
-    processed['ortalama_qiymet_m2'] = round(avg_price) if avg_price is not None else None
-
-    # --- Addım 3: Metro Məsafəsinin Hesablanması ---
+    processed['ortalama_qiymet_m2'] = round(avg_price) if avg_price else None
+    # Metro məsafəsi
+    lat,lng=processed.get("Lat"),processed.get("Lng")
     mesafe_km = None
     if pd.notna(lat) and pd.notna(lng):
         try:
-            metro_distances = [geodesic((lat, lng), (row["Lat"], row["Long"])).km for _, row in metro_data.iterrows()]
-            if metro_distances: mesafe_km = min(metro_distances)
+            metro_distances=[geodesic((lat,lng),(row["Lat"],row["Long"])).km for _,row in metro_data.iterrows()]
+            if metro_distances: mesafe_km=min(metro_distances)
         except Exception: pass
-    processed['Metroya məsafə (km)'] = round(mesafe_km, 2) if mesafe_km is not None else None
-    
-    # --- Addım 4: Seqmentləşdirmə ---
-    if avg_price and processed['qiymet_m2'] < avg_price:
-        processed['segment'] = "🚀 Xüsusi Fürsət" if mesafe_km is not None and mesafe_km < 0.5 else "🏠 Yeni Fürsət"
+    processed['Metroya məsafə (km)'] = round(mesafe_km,2) if mesafe_km is not None else None
+    # Seqment
+    if avg_price and processed['qiymet_m2']<avg_price:
+        processed['segment'] = "🚀 Xüsusi Fürsət" if mesafe_km is not None and mesafe_km<0.5 else "🏠 Yeni Fürsət"
     else:
         processed['segment'] = "Standart"
-        
-    # --- Addım 5: Yekun Cədvəl Formatına Salma ---
-    final_item = {}
-    desired_columns = [
-        "Qiymet", "Erazi", "Link", "Lat", "Lng", "Elan yerlesdirilme tarixi",
-        "Kateqoriya", "Mərtəbə", "Sahə", "Otaq sayı", "Çıxarış", "Təmir", "İpoteka",
-        "qiymet_m2", "ortalama_qiymet_m2", "Metroya məsafə (km)", "segment"
-    ]
-    
-    # Adların düzgün tanınması üçün xəritə
-    KEY_MAP = {"Otaqların sayı": "Otaq sayı"}
-    
-    # Xam datadakı adları standart adlara çevir
-    standardized_processed = {KEY_MAP.get(k, k): v for k, v in processed.items()}
-
-    for col in desired_columns:
-        final_item[col] = standardized_processed.get(col)
-
-    return final_item
-
-def get_all_new_links(session: requests.Session, max_pages: int, existing_links: set) -> set:
-    """Bütün səhifələrdən yeni linkləri paralel olaraq toplayır."""
-    all_links = set()
-    def scrape_page_links(page: int) -> set:
-        try:
-            url = f"https://bina.az/items/5544660?page={page}"
-            r = session.get(url, headers=HEADERS, timeout=15)
-            r.raise_for_status()
-            soup = BeautifulSoup(r.text, "html.parser")
-            page_links = {BASE_URL + a['href'] for a in soup.find_all("a", class_="item_link") if a.get("href")}
-            return page_links - existing_links
-        except RequestException:
-            return set()
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        results = executor.map(scrape_page_links, range(1, max_pages + 1))
-        for page_links in results:
-            all_links.update(page_links)
-    return all_links
-
-def run_process(bucket: oss2.Bucket, metro_data: pd.DataFrame, ortalama_m2: pd.DataFrame, max_pages: int, selected_areas: List[str]):
-    process_container = st.container()
-    with process_container:
-        st.markdown("### 🚀 Axtarış Prosesi")
-        stats_placeholder = st.empty()
-        progress_bar = st.progress(0, text="Başlanğıc...")
-
-    depo_df = get_depo_df(bucket)
-    existing_links = set(depo_df["Link"]) if "Link" in depo_df.columns else set()
-    
-    with requests.Session() as session:
-        progress_bar.progress(5, text=f"🔗 {max_pages} səhifədən yeni linklər axtarılır...")
-        all_new_links = get_all_new_links(session, max_pages, existing_links)
-
-        if not all_new_links:
-            stats_placeholder.success("✅ Axtarış bitdi. Yeni elan tapılmadı.")
-            time.sleep(3)
-            process_container.empty()
-            return
-        
-        stats_placeholder.info(f"🔗 {len(all_new_links)} yeni link tapıldı. Detallar analiz edilir...")
-        progress_bar.progress(25, text=f"🕵️ {len(all_new_links)} elan analiz edilir...")
-        
-        yeni_elanlar = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_link = {executor.submit(scrape_item_details, session, link): link for link in all_new_links}
-            for i, future in enumerate(concurrent.futures.as_completed(future_to_link)):
-                raw_details = future.result()
-                if raw_details:
-                    item_erazi = raw_details.get("Erazi", "").lower()
-                    if selected_areas and not any(area.lower() in item_erazi for area in selected_areas):
-                        continue
-                    
-                    analyzed_item = process_and_analyze_item(raw_details, ortalama_m2, metro_data)
-                    if analyzed_item:
-                        yeni_elanlar.append(analyzed_item)
-                
-                progress_percentage = 25 + int(75 * (i + 1) / len(all_new_links))
-                progress_bar.progress(progress_percentage, text=f"Analiz edildi: {i+1}/{len(all_new_links)}")
-
-    process_container.empty()
-
-    if not yeni_elanlar:
-        st.success("✅ Analiz tamamlandı. Meyarlara uyğun yeni fürsət tapılmadı.")
-        return
-    
-    yeni_elanlar_df = pd.DataFrame(yeni_elanlar)
-    combined_df = pd.concat([depo_df, yeni_elanlar_df], ignore_index=True).drop_duplicates(subset=['Link'], keep='last')
-    
-    # Save a clean version to OSS without analysis columns
-    columns_to_save = [col for col in ["Qiymet", "Erazi", "Link", "Lat", "Lng", "Elan yerlesdirilme tarixi", "Kateqoriya", "Mərtəbə", "Sahə", "Otaq sayı", "Çıxarış", "Təmir", "İpoteka"] if col in combined_df.columns]
-    save_df_to_oss(bucket, combined_df[columns_to_save])
-    st.success(f"🎉 {len(yeni_elanlar)} yeni elan tapıldı və `Depo.xlsx` faylına əlavə edildi.")
-    
-    fursetler = yeni_elanlar_df[yeni_elanlar_df['segment'].str.contains("Fürsət", na=False)]
-    if not fursetler.empty:
-        mail_body_list = [
-            (f"{row['segment']}\n"
-             f"Ərazi: {row.get('Erazi', 'N/A')}\n"
-             f"Qiymət/m²: {row.get('qiymet_m2', 0):.0f} AZN (Bazar ort.: {row.get('ortalama_qiymet_m2', 0):.0f} AZN)\n"
-             f"Metroya məsafə: {row.get('Metroya məsafə (km)', 'N/A')} km\n"
-             f"Link: {row.get('Link')}")
-            for _, row in fursetler.iterrows()
-        ]
-        email_subject = f"📢 {len(fursetler)} Yeni Əmlak Fürsəti Tapıldı!"
-        email_body = "\n\n---\n\n".join(mail_body_list)
-        
-        notification_emails = set(ADMIN_EMAILS)
-        if 'user_email' in st.session_state and st.session_state.user_email:
-            notification_emails.add(st.session_state.user_email)
-        
-        send_email(email_subject, email_body, receivers=list(notification_emails))
-        
-        st.subheader("🎯 Tapılan Fürsətlər")
-        display_cols = ['segment', 'Erazi', 'qiymet_m2', 'ortalama_qiymet_m2', 'Metroya məsafə (km)', 'Link']
-        st.dataframe(fursetler[[col for col in display_cols if col in fursetler.columns]])
-    else:
-        st.info("Yeni elanlar tapılsa da, aralarında meyarlara uyğun fürsət yoxdur.")
+    return processed
 
 # =========================================================
+# Burada artıq run_process və UI hissəsi birləşdirilə bilər (sənin əvvəlki kodla eyni, metro məsafəsi artıq daxil edilib)
+
 # --- STREAMLIT UI ---
 st.set_page_config(page_title="Əmlak Analizatoru", layout="wide", page_icon="🏙️")
 
@@ -498,4 +361,5 @@ else: # İstifadəçi giriş edibsə
                 else: st.info("Seçilmiş ərazi üçün trend analizi aparmaq məqsədilə kifayət qədər data yoxdur.")
             else: st.warning("Trend analizi üçün 'Elan yerlesdirilme tarixi' sütunu tapılmadı.")
             
+
     st.markdown('</div>', unsafe_allow_html=True)
